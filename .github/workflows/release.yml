@@ -1,0 +1,78 @@
+name: Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0)'
+        required: true
+
+jobs:
+  build_and_release:
+    name: Build APK & publish release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: ./Android/src
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('Android/src/**/*.gradle*', 'Android/src/**/libs.versions.toml') }}
+          restore-keys: gradle-
+
+      - name: Build release APK
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Rename APK
+        id: apk
+        run: |
+          TAG=${{ github.event.inputs.tag || github.ref_name }}
+          SRC=app/build/outputs/apk/release/app-release.apk
+          DST=edge-gallery-${TAG}.apk
+          mv "$SRC" "$DST"
+          echo "path=${{ github.workspace }}/Android/src/$DST" >> "$GITHUB_OUTPUT"
+          echo "name=$DST" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.apk.outputs.tag }}
+          name: ${{ steps.apk.outputs.tag }}
+          body: |
+            ## Edge Gallery — ${{ steps.apk.outputs.tag }}
+
+            Android APK with on-device LLM inference + OpenAI-compatible local API server.
+
+            ### Installation
+            1. Enable "Install from unknown sources" on your Android device (Settings → Security)
+            2. Download and install `${{ steps.apk.outputs.name }}`
+            3. Requires Android 11+ (API 31)
+
+            ### API usage (once a model is loaded)
+            ```
+            GET  http://<phone-ip>:8080/v1/models
+            POST http://<phone-ip>:8080/v1/chat/completions
+            ```
+          files: ${{ steps.apk.outputs.path }}
+          draft: false
+          prerelease: false

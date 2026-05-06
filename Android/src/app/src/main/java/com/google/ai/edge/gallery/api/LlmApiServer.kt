@@ -118,13 +118,13 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
   override fun serve(session: IHTTPSession): Response {
     val response =
       when {
-        session.method == Method.OPTIONS -> newFixedLengthResponse(Status.OK, MIME_PLAINTEXT, "")
+        session.method == Method.OPTIONS -> newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "")
         session.method == Method.GET && session.uri == "/v1/models" -> handleModels()
         session.method == Method.POST && session.uri == "/v1/chat/completions" ->
           handleChatCompletions(session)
         else ->
           jsonResponse(
-            Status.NOT_FOUND,
+            Response.Status.NOT_FOUND,
             """{"error":{"message":"Not found","type":"invalid_request_error","code":"not_found"}}""",
           )
       }
@@ -140,21 +140,21 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
       if (modelInstance != null)
         """[{"id":"$modelName","object":"model","created":$ts,"owned_by":"local"}]"""
       else "[]"
-    return jsonResponse(Status.OK, """{"object":"list","data":$data}""")
+    return jsonResponse(Response.Status.OK, """{"object":"list","data":$data}""")
   }
 
   private fun handleChatCompletions(session: IHTTPSession): Response {
     val instance =
       modelInstance
         ?: return jsonResponse(
-          Status.SERVICE_UNAVAILABLE,
+          Response.Status.SERVICE_UNAVAILABLE,
           """{"error":{"message":"No model is loaded","type":"server_error"}}""",
         )
 
     val contentLength = session.headers["content-length"]?.toIntOrNull() ?: 0
     if (contentLength == 0) {
       return jsonResponse(
-        Status.BAD_REQUEST,
+        Response.Status.BAD_REQUEST,
         """{"error":{"message":"Empty request body","type":"invalid_request_error"}}""",
       )
     }
@@ -165,26 +165,26 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
       try {
         gson.fromJson(String(bodyBytes), ChatCompletionRequest::class.java)
           ?: return jsonResponse(
-            Status.BAD_REQUEST,
+            Response.Status.BAD_REQUEST,
             """{"error":{"message":"Invalid JSON","type":"invalid_request_error"}}""",
           )
       } catch (e: Exception) {
         return jsonResponse(
-          Status.BAD_REQUEST,
+          Response.Status.BAD_REQUEST,
           """{"error":{"message":"JSON parse error: ${e.message?.escapeJson()}","type":"invalid_request_error"}}""",
         )
       }
 
     if (request.messages.isEmpty()) {
       return jsonResponse(
-        Status.BAD_REQUEST,
+        Response.Status.BAD_REQUEST,
         """{"error":{"message":"messages cannot be empty","type":"invalid_request_error"}}""",
       )
     }
 
     if (!inferencing.compareAndSet(false, true)) {
       return jsonResponse(
-        Status.TOO_MANY_REQUESTS,
+        Response.Status.TOO_MANY_REQUESTS,
         """{"error":{"message":"A request is already in progress. Please try again later.","type":"server_error"}}""",
       )
     }
@@ -211,7 +211,7 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
         createConversation(instance, systemPrompt, request)
       } catch (e: Exception) {
         return jsonResponse(
-          Status.INTERNAL_ERROR,
+          Response.Status.INTERNAL_ERROR,
           """{"error":{"message":"Failed to create conversation: ${e.message?.escapeJson()}","type":"server_error"}}""",
         )
       }
@@ -245,7 +245,7 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
 
     errorRef.get()?.let { err ->
       return jsonResponse(
-        Status.INTERNAL_ERROR,
+        Response.Status.INTERNAL_ERROR,
         """{"error":{"message":"${err.escapeJson()}","type":"server_error"}}""",
       )
     }
@@ -254,7 +254,7 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
     val ts = System.currentTimeMillis() / 1000
     val contentJson = gson.toJson(text.toString())
     return jsonResponse(
-      Status.OK,
+      Response.Status.OK,
       """{"id":"$id","object":"chat.completion","created":$ts,"model":"$modelName","choices":[{"index":0,"message":{"role":"assistant","content":$contentJson},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}""",
     )
   }
@@ -326,7 +326,7 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
       }
     }.also { it.isDaemon = true }.start()
 
-    return newChunkedResponse(Status.OK, "text/event-stream", pipedIn)
+    return newChunkedResponse(Response.Status.OK, "text/event-stream", pipedIn)
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

@@ -371,7 +371,7 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
       )
     )
 
-  private fun jsonResponse(status: Status, body: String): Response =
+  private fun jsonResponse(status: Response.Status, body: String): Response =
     newFixedLengthResponse(status, "application/json", body)
 
   private fun String.escapeJson(): String =

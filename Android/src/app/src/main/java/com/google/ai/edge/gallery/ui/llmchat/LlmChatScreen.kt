@@ -24,19 +24,31 @@ import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.R
+import com.google.ai.edge.gallery.api.LlmApiServerManager
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.ModelCapability
@@ -211,6 +223,7 @@ fun ChatViewWrapper(
 ) {
   val context = LocalContext.current
   val task = modelManagerViewModel.getTaskById(id = taskId)!!
+  val apiServerUrl by LlmApiServerManager.serverUrl.collectAsState()
 
   ChatView(
     task = task,
@@ -315,7 +328,10 @@ fun ChatViewWrapper(
     onSkillClicked = onSkillClicked,
     navigateUp = navigateUp,
     modifier = modifier,
-    composableBelowMessageList = composableBelowMessageList,
+    composableBelowMessageList = { model ->
+      apiServerUrl?.let { url -> ApiServerBanner(url = url) }
+      composableBelowMessageList(model)
+    },
     showImagePicker = showImagePicker,
     emptyStateComposable = emptyStateComposable,
     allowEditingSystemPrompt = allowEditingSystemPrompt,
@@ -324,4 +340,31 @@ fun ChatViewWrapper(
     sendMessageTrigger = sendMessageTrigger,
     showAudioPicker = showAudioPicker,
   )
+}
+
+@Composable
+private fun ApiServerBanner(url: String) {
+  Surface(
+    color = MaterialTheme.colorScheme.secondaryContainer,
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.Center,
+      modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+    ) {
+      Icon(
+        imageVector = Icons.Default.Api,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier.size(14.dp),
+      )
+      Text(
+        text = "  API: $url/v1",
+        color = MaterialTheme.colorScheme.onSecondaryContainer,
+        fontSize = 12.sp,
+        fontFamily = FontFamily.Monospace,
+      )
+    }
+  }
 }

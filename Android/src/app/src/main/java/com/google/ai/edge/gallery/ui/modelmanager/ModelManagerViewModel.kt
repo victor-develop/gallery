@@ -56,7 +56,9 @@ import com.google.ai.edge.gallery.data.createLlmChatConfigs
 import com.google.ai.edge.gallery.proto.AccessTokenData
 import com.google.ai.edge.gallery.proto.ImportedModel
 import com.google.ai.edge.gallery.proto.Theme
+import com.google.ai.edge.gallery.api.LlmApiServerManager
 import com.google.ai.edge.gallery.runtime.aicore.AICoreModelHelper
+import com.google.ai.edge.gallery.ui.llmchat.LlmModelInstance
 import com.google.ai.edge.litertlm.Contents
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
@@ -450,6 +452,12 @@ constructor(
             model = model,
             status = ModelInitializationStatusType.INITIALIZED,
           )
+          // Start OpenAI-compatible API server for LiteRT models.
+          val liteRtInstance = model.instance as? LlmModelInstance
+          if (liteRtInstance != null) {
+            LlmApiServerManager.startWithModel(liteRtInstance, model.name)
+          }
+
           if (model.cleanUpAfterInit) {
             Log.d(TAG, "Model '${model.name}' needs cleaning up after init.")
             cleanupModel(context = context, task = task, model = model)
@@ -495,6 +503,7 @@ constructor(
       model.cleanUpAfterInit = false
       Log.d(TAG, "Cleaning up model '${model.name}'...")
       val onDoneFn: () -> Unit = {
+        LlmApiServerManager.stop()
         model.instance = null
         model.initializing = false
         updateModelInitializationStatus(

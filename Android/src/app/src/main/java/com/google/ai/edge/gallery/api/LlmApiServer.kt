@@ -16,6 +16,7 @@
 
 package com.google.ai.edge.gallery.api
 
+import android.util.Base64
 import android.util.Log
 import com.google.ai.edge.gallery.ui.llmchat.LlmModelInstance
 import com.google.ai.edge.litertlm.Content
@@ -26,10 +27,15 @@ import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.MessageCallback
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.gson.Gson
+import com.google.gson.GsonBuilder
+import com.google.gson.JsonDeserializationContext
+import com.google.gson.JsonDeserializer
+import com.google.gson.JsonElement
 import com.google.gson.annotations.SerializedName
 import fi.iki.elonen.NanoHTTPD
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
+import java.lang.reflect.Type
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.UUID
@@ -45,9 +51,46 @@ const val API_SERVER_PORT = 8080
 
 // ── Request / response data classes ──────────────────────────────────────────
 
+/**
+ * A single content part inside a message. In the OpenAI vision format the `content` field is an
+ * array of these objects.
+ */
+data class ContentPart(
+  val type: String = "",
+  val text: String? = null,
+  @SerializedName("image_url") val imageUrl: ImageUrlPart? = null,
+)
+
+data class ImageUrlPart(val url: String = "")
+
+/**
+ * Represents the `content` field of a chat message which can be either a plain string or an array
+ * of [ContentPart] objects (OpenAI vision format).
+ */
+sealed class MessageContent {
+  data class Text(val text: String) : MessageContent()
+
+  data class Parts(val parts: List<ContentPart>) : MessageContent()
+}
+
+/** Custom Gson deserializer that handles the polymorphic `content` field. */
+class MessageContentDeserializer : JsonDeserializer<MessageContent> {
+  override fun deserialize(
+    json: JsonElement,
+    typeOfT: Type,
+    context: JsonDeserializationContext,
+  ): MessageContent =
+    if (json.isJsonArray) {
+      val parts = json.asJsonArray.map { context.deserialize<ContentPart>(it, ContentPart::class.java) }
+      MessageContent.Parts(parts)
+    } else {
+      MessageContent.Text(if (json.isJsonPrimitive) json.asJsonPrimitive.asString else "")
+    }
+}
+
 data class ApiChatMessage(
   val role: String = "",
-  val content: String = "",
+  val content: MessageContent = MessageContent.Text(""),
 )
 
 data class ChatCompletionRequest(
@@ -109,7 +152,10 @@ object LlmApiServerManager {
 
 @OptIn(ExperimentalApi::class)
 class LlmApiServer(port: Int) : NanoHTTPD(port) {
-  private val gson = Gson()
+  private val gson: Gson =
+    GsonBuilder()
+      .registerTypeAdapter(MessageContent::class.java, MessageContentDeserializer())
+      .create()
   private val inferencing = AtomicBoolean(false)
 
   @Volatile var modelInstance: LlmModelInstance? = null
@@ -204,11 +250,11 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
     instance: LlmModelInstance,
     request: ChatCompletionRequest,
   ): Response {
-    val (systemPrompt, userPrompt) = extractMessages(request.messages)
+    val parsed = extractMessages(request.messages)
 
     val conversation =
       try {
-        createConversation(instance, systemPrompt, request)
+        createConversation(instance, parsed.systemPrompt, request)
       } catch (e: Exception) {
         return jsonResponse(
           Response.Status.INTERNAL_ERROR,
@@ -221,7 +267,7 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
     val errorRef = AtomicReference<String?>(null)
 
     conversation.sendMessageAsync(
-      Contents.of(Content.Text(userPrompt)),
+      buildContents(parsed.userPrompt, parsed.imageBytes),
       object : MessageCallback {
         override fun onMessage(message: Message) {
           val token = message.toString()
@@ -260,7 +306,7 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
   }
 
   private fun handleStreaming(instance: LlmModelInstance, request: ChatCompletionRequest): Response {
-    val (systemPrompt, userPrompt) = extractMessages(request.messages)
+    val parsed = extractMessages(request.messages)
     val id = "chatcmpl-${UUID.randomUUID()}"
     val ts = System.currentTimeMillis() / 1000
 
@@ -269,7 +315,7 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
 
     Thread {
       try {
-        val conversation = createConversation(instance, systemPrompt, request)
+        val conversation = createConversation(instance, parsed.systemPrompt, request)
         val latch = CountDownLatch(1)
 
         // Send the role delta first (OpenAI spec)
@@ -279,7 +325,7 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
         pipedOut.flush()
 
         conversation.sendMessageAsync(
-          Contents.of(Content.Text(userPrompt)),
+          buildContents(parsed.userPrompt, parsed.imageBytes),
           object : MessageCallback {
             override fun onMessage(message: Message) {
               val token = message.toString()
@@ -331,26 +377,95 @@ class LlmApiServer(port: Int) : NanoHTTPD(port) {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  private fun extractMessages(messages: List<ApiChatMessage>): Pair<String?, String> {
-    val system = messages.firstOrNull { it.role == "system" }?.content?.takeIf { it.isNotEmpty() }
+  /** Parsed result of [extractMessages]. */
+  private data class ParsedMessages(
+    val systemPrompt: String?,
+    val userPrompt: String,
+    val imageBytes: List<ByteArray>,
+  )
+
+  /**
+   * Extracts a system prompt, the user prompt text, and any base64-encoded images from the OpenAI
+   * message list. Images supplied via `image_url` data-URIs are decoded and returned as raw bytes.
+   */
+  private fun extractMessages(messages: List<ApiChatMessage>): ParsedMessages {
+    val system =
+      messages
+        .firstOrNull { it.role == "system" }
+        ?.let { messageText(it.content) }
+        ?.takeIf { it.isNotEmpty() }
+
     val others = messages.filter { it.role != "system" }
+    val images = mutableListOf<ByteArray>()
+
+    // Collect images from all user messages.
+    for (msg in others) {
+      when (val c = msg.content) {
+        is MessageContent.Parts ->
+          c.parts
+            .filter { it.type == "image_url" }
+            .mapNotNull { it.imageUrl?.url }
+            .mapNotNull { decodeDataUri(it) }
+            .forEach { images.add(it) }
+        is MessageContent.Text -> {} // no images in plain text
+      }
+    }
 
     val prompt =
       if (others.size == 1) {
-        others.first().content
+        messageText(others.first().content)
       } else {
-        // Multi-turn: format as labelled dialogue. The conversation history is embedded as context
-        // because LiteRT conversations cannot replay arbitrary assistant turns.
+        // Multi-turn: format as labelled dialogue.
         buildString {
           others.forEachIndexed { i, msg ->
             val label = if (msg.role == "assistant") "Assistant" else "User"
             if (i > 0) append("\n\n")
-            append("$label: ${msg.content}")
+            append("$label: ${messageText(msg.content)}")
           }
         }
       }
 
-    return Pair(system, prompt)
+    return ParsedMessages(systemPrompt = system, userPrompt = prompt, imageBytes = images)
+  }
+
+  /** Extracts the text from a [MessageContent], concatenating text parts if needed. */
+  private fun messageText(content: MessageContent): String =
+    when (content) {
+      is MessageContent.Text -> content.text
+      is MessageContent.Parts ->
+        content.parts.filter { it.type == "text" }.mapNotNull { it.text }.joinToString("\n")
+    }
+
+  /**
+   * Decodes a `data:image/...;base64,...` URI to raw bytes. Returns `null` for non-data URIs or on
+   * decode failure.
+   */
+  private fun decodeDataUri(url: String): ByteArray? {
+    if (!url.startsWith("data:")) return null
+    val commaIdx = url.indexOf(',')
+    if (commaIdx < 0) return null
+    return try {
+      Base64.decode(url.substring(commaIdx + 1), Base64.DEFAULT)
+    } catch (e: Exception) {
+      Log.w(TAG, "Failed to decode base64 image data", e)
+      null
+    }
+  }
+
+  /** Builds the [Contents] to send to the model, placing images before text. */
+  private fun buildContents(userPrompt: String, imageBytes: List<ByteArray>): Contents {
+    val parts = mutableListOf<Content>()
+    for (img in imageBytes) {
+      parts.add(Content.ImageBytes(img))
+    }
+    if (userPrompt.isNotBlank()) {
+      parts.add(Content.Text(userPrompt))
+    }
+    // Ensure there is always at least one content part for the model.
+    if (parts.isEmpty()) {
+      parts.add(Content.Text(""))
+    }
+    return Contents.of(parts)
   }
 
   private fun createConversation(

@@ -351,6 +351,10 @@ fun isPixel10(): Boolean {
   return Build.MODEL != null && Build.MODEL.lowercase().contains("pixel 10")
 }
 
+fun isSamsungDevice(): Boolean {
+  return Build.MANUFACTURER.lowercase() == "samsung"
+}
+
 fun Modifier.clearFocusOnKeyboardDismiss(): Modifier = composed {
   var isFocused by remember { mutableStateOf(false) }
   var keyboardAppearedSinceLastFocused by remember { mutableStateOf(false) }

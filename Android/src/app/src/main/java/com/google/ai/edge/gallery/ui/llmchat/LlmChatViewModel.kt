@@ -103,10 +103,12 @@ open class LlmChatViewModelBase(
     _uiSystemPrompt.value = newPrompt
     viewModelScope.launch {
       systemPromptRepository?.updateSystemPrompt(task.id, newPrompt)
+      val systemInstruction =
+        if (newPrompt.isNotBlank()) Contents.of(newPrompt) else null
       resetSession(
         task = task,
         model = model,
-        systemInstruction = Contents.of(newPrompt),
+        systemInstruction = systemInstruction,
         supportImage = true,
         supportAudio = true,
         onDone = { addMessage(model, ChatMessageInfo(content = systemPromptUpdatedMessage)) },

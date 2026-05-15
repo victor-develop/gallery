@@ -475,12 +475,14 @@ constructor(
 
       // Call the model initialization function.
       val systemPrompt = SystemPromptHelper.getEffectiveSystemPrompt(systemPromptRepository, task)
+      val systemInstruction =
+        if (systemPrompt.isNotBlank()) Contents.of(systemPrompt) else null
       getCustomTaskByTaskId(id = task.id)
         ?.initializeModelFn(
           context = context,
           coroutineScope = viewModelScope,
           model = model,
-          systemInstruction = Contents.of(systemPrompt),
+          systemInstruction = systemInstruction,
           onDone = onDoneFn,
         )
     }

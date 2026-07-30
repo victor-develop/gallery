@@ -19,6 +19,7 @@ package com.google.ai.edge.gallery.data
 import android.os.Build
 import android.util.Log
 import com.google.ai.edge.gallery.common.isPixel10
+import com.google.ai.edge.gallery.common.isSamsungDevice
 import com.google.gson.annotations.SerializedName
 
 private const val TAG = "AGModelAllowlist"
@@ -150,6 +151,11 @@ data class AllowedModel(
         } else if (accelerator == "npu") {
           visionAccelerator = Accelerator.NPU
         }
+      }
+      // Samsung GPU drivers do not support multi-signature TFLite models required by the vision
+      // encoder. Fall back to CPU to avoid "must have exactly one signature but got 3" error.
+      if (isSamsungDevice() && visionAccelerator == Accelerator.GPU) {
+        visionAccelerator = Accelerator.CPU
       }
       val npuOnly =
         accelerators.size == 1 &&
